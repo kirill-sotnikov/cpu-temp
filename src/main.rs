@@ -1,120 +1,185 @@
-use std::time::Duration;
+use std::{thread, time::Duration};
 
-use eframe;
-use eframe::egui;
-use egui::{Id, Margin, PointerButton, Sense, ViewportCommand};
-use sysinfo::{Components, Disks, Networks, System};
+use image::{ImageBuffer, Rgba};
+use imageproc::drawing::{draw_filled_circle_mut, draw_text_mut};
+use tao::{
+    event::Event,
+    event_loop::{ControlFlow, EventLoopBuilder},
+};
 
-#[derive(Clone)]
-struct ComponentTemperature {
-    label: String,
-    temperature: f32,
+use ab_glyph::FontRef;
+use tray_icon::{
+    TrayIconBuilder, TrayIconEvent,
+    menu::{Menu, MenuEvent, MenuItem},
+};
+
+mod temp;
+
+enum UserEvent {
+    Tick,
+    TrayIconEvent(tray_icon::TrayIconEvent),
+    MenuEvent(tray_icon::menu::MenuEvent),
 }
 
-fn get_cpu_temperature() -> Option<ComponentTemperature> {
-    let components = Components::new_with_refreshed_list();
-    println!("=> components:");
+fn main() {
+    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
 
-    let mut component_temps = Vec::new();
+    let proxy = event_loop.create_proxy();
+    TrayIconEvent::set_event_handler(Some(move |event| {
+        let _ = proxy.send_event(UserEvent::TrayIconEvent(event));
+    }));
 
-    for component in &components {
-        if let Some(temperature) = component.temperature() {
-            component_temps.push(ComponentTemperature {
-                label: component.label().to_string(),
-                temperature,
-            });
+    let proxy = event_loop.create_proxy();
+    MenuEvent::set_event_handler(Some(move |event| {
+        let _ = proxy.send_event(UserEvent::MenuEvent(event));
+    }));
+
+    let proxy = event_loop.create_proxy();
+    thread::spawn(move || {
+        loop {
+            let _ = proxy.send_event(UserEvent::Tick);
+            thread::sleep(Duration::from_secs(10));
         }
-    }
+    });
 
-    // component_temps.sort_by(|a, b| a.temperature.partial_cmp(&b.temperature).unwrap());
+    let tray_menu = Menu::new();
 
-    let mut max: Option<ComponentTemperature> = None;
+    let quit_i = MenuItem::new("Quit", true, None);
 
-    for component in &component_temps {
-        if component.label.starts_with("PMU") && component.label.contains("tdie") {
-            println!("{:<30} {:.1}°C", component.label, component.temperature);
+    tray_menu.append_items(&[&quit_i]).unwrap();
 
-            if let Some(max_temp) = &mut max {
-                if component.temperature > max_temp.temperature {
-                    *max_temp = component.clone();
+    let mut tray_icon = None;
+
+    event_loop.run(move |event, _, control_flow| {
+        *control_flow = ControlFlow::Wait;
+
+        match event {
+            Event::NewEvents(tao::event::StartCause::Init) => {
+                tray_icon = Some(
+                    TrayIconBuilder::new()
+                        .with_icon(create_icon_with_text(0))
+                        .with_menu(Box::new(tray_menu.clone()))
+                        .build()
+                        .unwrap(),
+                );
+
+                #[cfg(target_os = "macos")]
+                unsafe {
+                    use objc2_core_foundation::{CFRunLoopGetMain, CFRunLoopWakeUp};
+
+                    let rl = CFRunLoopGetMain().unwrap();
+                    CFRunLoopWakeUp(&rl);
                 }
-            } else {
-                max = Some(component.clone());
+            }
+
+            Event::UserEvent(UserEvent::MenuEvent(event)) => {
+                println!("{event:?}");
+
+                if event.id == quit_i.id() {
+                    tray_icon.take();
+                    *control_flow = ControlFlow::Exit;
+                }
+            }
+
+            Event::UserEvent(UserEvent::Tick) => {
+                let temp = temp::get_cpu_temperature();
+                if let Some(component_temp) = temp {
+                    let temp = component_temp.temperature as u8;
+                    tray_icon = Some(
+                        TrayIconBuilder::new()
+                            .with_icon(create_icon_with_text(temp))
+                            .with_menu(Box::new(tray_menu.clone()))
+                            .build()
+                            .unwrap(),
+                    );
+                }
+            }
+
+            _ => {}
+        }
+    })
+}
+
+fn create_icon_with_text(temp: u8) -> tray_icon::Icon {
+    let text = format!("{}°", temp);
+    let count_of_numbers = temp.to_string().len() as u32;
+    let width = 20 + 80 + 20 + count_of_numbers * 60 + 40 + 20;
+    let height = 128u32;
+    let mut img = ImageBuffer::new(width, height);
+
+    // Заполняем белым фоном
+    for y in 0..height {
+        for x in 0..width {
+            let mut draw = true;
+
+            // Радиус скругления
+            let radius = 40.0;
+
+            // Проверяем углы
+            // Верхний левый угол
+            if x < radius as u32 && y < radius as u32 {
+                let dx = radius - x as f32;
+                let dy = radius - y as f32;
+                if dx * dx + dy * dy > radius * radius {
+                    draw = false;
+                }
+            }
+            // Верхний правый угол
+            else if x >= width - radius as u32 && y < radius as u32 {
+                let dx = x as f32 - (width as f32 - radius);
+                let dy = radius - y as f32;
+                if dx * dx + dy * dy > radius * radius {
+                    draw = false;
+                }
+            }
+            // Нижний левый угол
+            else if x < radius as u32 && y >= height - radius as u32 {
+                let dx = radius - x as f32;
+                let dy = y as f32 - (height as f32 - radius);
+                if dx * dx + dy * dy > radius * radius {
+                    draw = false;
+                }
+            }
+            // Нижний правый угол
+            else if x >= width - radius as u32 && y >= height - radius as u32 {
+                let dx = x as f32 - (width as f32 - radius);
+                let dy = y as f32 - (height as f32 - radius);
+                if dx * dx + dy * dy > radius * radius {
+                    draw = false;
+                }
+            }
+
+            if draw {
+                img.put_pixel(x, y, Rgba([255, 255, 255, 230]));
             }
         }
     }
 
-    max
-}
+    // Загружаем встроенный шрифт
+    let font_data = include_bytes!("../Roboto_Condensed-Medium.ttf");
+    let font = FontRef::try_from_slice(font_data as &[u8]).expect("Ошибка загрузки шрифта");
 
-fn main() {
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([40.0, 15.0])
-            .with_decorations(false)
-            .with_position([100.0, 7.0])
-            .with_always_on_top()
-            .with_transparent(true)
-            .with_resizable(false).with_window_level(egui::WindowLevel::AlwaysOnTop),
-        ..Default::default()
+    let circle_color = if temp < 75 {
+        Rgba([0, 205, 0, 255])
+    } else if temp < 90 {
+        Rgba([255, 165, 0, 255])
+    } else {
+        Rgba([235, 0, 0, 255])
     };
 
-    eframe::run_native(
-        "My egui App",
-        options,
-        Box::new(|cc| {
-            Ok(Box::<MyApp>::default())
-        }),
-    )
-    .unwrap();
+    draw_filled_circle_mut(&mut img, (60, height as i32 / 2), 40, circle_color);
+
+    // Рисуем текст (чёрный цвет)
+    draw_text_mut(
+        &mut img,
+        Rgba([0, 0, 0, 215]),
+        130,
+        4,     // 16
+        120.0, // 100.0
+        &font,
+        &text,
+    );
+
+    let rgba = img.into_raw();
+    tray_icon::Icon::from_rgba(rgba, width, height).unwrap()
 }
-
-struct MyApp {
-    cpu_temperature: Option<ComponentTemperature>,
-}
-
-impl Default for MyApp {
-    fn default() -> Self {
-        Self {
-            cpu_temperature: get_cpu_temperature(),
-        }
-    }
-}
-
-impl eframe::App for MyApp {
-    // fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-    //     // egui::Rgba::TRANSPARENT.to_array()
-    //     egui::Rgba::GREEN.to_array()
-    // }
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.cpu_temperature = get_cpu_temperature();
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().inner_margin(Margin::from(0)))
-            .show(ctx, |ui| {
-                ui.style_mut().interaction.selectable_labels = false;
-                println!("render");
-                if let Some(cpu_temperature) = &self.cpu_temperature {
-                    let app_rect = ui.max_rect();
-                    let title_rect = {
-                        let mut rect = app_rect;
-                        rect.max.y = rect.min.y + 20.0;
-                        rect
-                    }.shrink(4.0);
-
-                    
-
-                    let title_bar_response =ui.interact(title_rect, Id::new("title_bar"), Sense::click_and_drag());
-
-                    if title_bar_response.drag_started_by(PointerButton::Primary) {
-                        ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
-                    }
-                    ui.label(format!("{:.1}°C", cpu_temperature.temperature));
-                } else {
-                    println!("No CPU temperature data available");
-                }
-            });
-
-        ctx.request_repaint_after(Duration::from_secs(10));
-    }
-}
-

@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-eframe = "0.33.0"
-egui = "0.33.0"
+ab_glyph = "0.2.32"
+image = "0.25.8"
+imageproc = "0.25.0"
+objc2-core-foundation = "0.3.2"
 sysinfo = "0.37.2"
+tao = "0.34"
+tray-icon = "0.21"
