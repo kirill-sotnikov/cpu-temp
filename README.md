@@ -1,1 +1,5 @@
-1. Обновить размер шрифта
+Command to dmg:
+
+```sh
+sh ./build.sh ./target/release/temp CpuTemp com.cputemp icons/macos.icns
+```
