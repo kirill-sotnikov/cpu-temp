@@ -1,6 +1,6 @@
-![](https://github.com/kirill-sotnikov/cpu-temp/blob/main/preview.jpg)
-
 # Cpu-temp
+
+![preview](https://github.com/kirill-sotnikov/cpu-temp/blob/main/preview.jpg)
 
 App shows the CPU temperature in the macOS tray.
 
