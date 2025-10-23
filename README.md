@@ -3,5 +3,5 @@
 ## Command to build dmg:
 
 ```sh
-sh ./build.sh ./target/release/temp CpuTemp com.cputemp icons/macos.icns
+sh ./build.sh ./target/release/temp Cpu-temp com.cputemp icons/macos.icns
 ```
